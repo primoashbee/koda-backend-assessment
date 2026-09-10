@@ -2,11 +2,30 @@
 
 A REST API for managing client projects, built with Laravel 13 and PHP 8.4.
 
-- Token authentication with Laravel Sanctum
-- Project CRUD with validation, search, filtering, sorting and pagination
+## Features implemented
+
+**Core requirements**
+
+- Project CRUD: list, show, create, update and delete projects
+- Validation: client name and project name are required, status and priority must be valid, and the due date cannot be earlier than the start date, each with a clear error message
+- Consistent JSON errors for invalid input (422), missing or invalid tokens (401), unknown projects (404) and too many login attempts (429)
+- Database: MySQL in Docker or SQLite locally, with migrations and seed data matching `test_data.json`
+- Layered architecture: controllers, form requests, DTOs, actions (services) and repositories
+
+**Bonus**
+
+- Pagination: 15 projects per page, with `meta` and `links`
+- Search across client name, project name and description
+- Filtering by status, priority, client name or project name, plus sorting
+- Authentication: register or log in to get a Sanctum bearer token; login is rate limited
+- Feature and unit tests (Pest), run in GitHub Actions together with Pint and Larastan
+- Docker setup with FrankenPHP and MySQL
+- API documentation: Swagger UI at `/docs/api`
+
+**Extras**
+
 - Soft deletes
-- Swagger UI generated from the code
-- Docker setup with MySQL
+- Duplicate protection: a client cannot have two projects with the same name
 
 ## Getting started
 
@@ -164,6 +183,77 @@ src/
 ```
 
 A request flows through: route → form request (validation) → controller → DTO → action → repository → model. Responses are built from API resources and wrapped by the `response()->success()`, `created()`, `updated()`, `deleted()` and `paginated()` macros in `app/Providers/AppServiceProvider.php`.
+
+| Layer | Responsibility |
+|---|---|
+| Controllers | HTTP only: read the validated request, call an action and return the response |
+| Actions (services) | One business operation per class, such as creating a project or checking login credentials |
+| Repositories | All reads and writes to the database for projects and users |
+
+For project CRUD the actions are thin today, because validation lives in form requests and queries live in the repository. They are the place for business rules as the domain grows, such as status transitions or notifications, without touching controllers or queries.
+
+A few standard Laravel features reach the database outside a repository, on purpose:
+
+- **Route model binding** loads the project for show, update and delete, and returns 404 when it does not exist.
+- **Uniqueness validation** (`Rule::unique`) checks for duplicate emails and project names in the form requests.
+- **Sanctum's `createToken()`** is called on the user model when a token is issued.
+
+## Assumptions
+
+- **Field names and values follow `test_data.json`:** camelCase keys and labels such as `In Progress` and `High`.
+- **Status and priority are optional when creating a project** and default to `Planning` and `Medium`.
+- **Description, start date and due date are optional.** The due date is only compared when a start date is given, and a due date on the start date is allowed.
+- **Dates use the `YYYY-MM-DD` format.**
+- **Every project endpoint requires authentication.** Any authenticated user can manage every project, because the project model has no owner.
+- **A client cannot have two projects with the same name.** Deleted projects still count, so a name is never reused silently.
+- **Deleting is a soft delete.** Deleted projects are hidden from the list and return 404.
+- **`PUT` replaces the project.** Optional fields left out become empty, except `status` and `priority`, which keep their current values.
+- **Endpoints are versioned under `/api/v1`,** so `GET /projects` is served at `GET /api/v1/projects`.
+- **"Get all projects" is paginated** to keep responses small. Search, filters and sorting are query parameters on that endpoint rather than separate endpoints.
+- **Registration is open** to anyone.
+
+## Technical decisions
+
+- **Code grouped by domain in `src/`.** Each domain keeps its controller, requests, actions, repository and model together, so a feature can be read and changed in one place.
+- **Controller → DTO → action → repository.** Controllers only handle HTTP, actions hold the business operations and repositories own the queries, so each layer can change and be tested on its own.
+- **Laravel Sanctum** provides simple bearer tokens without the overhead of OAuth.
+- **Form requests** hold all validation, with custom messages that list the valid values.
+- **Status and priority are stored as the labels the API shows,** so no mapping layer is needed. PHP enums keep the allowed values in one place.
+- **Duplicate projects are blocked by a database constraint as well as validation,** because validation alone cannot stop two identical requests arriving at the same time.
+- **Every successful response uses one `{message, data}` format,** so clients handle all endpoints the same way.
+- **Sorting only accepts known fields,** because column names cannot be passed safely to the database as query parameters.
+- **The Swagger documentation is generated from the code** (Scramble), so it stays in sync with the validation rules and responses.
+
+## AI disclosure
+
+This project was built with **Claude Code** (Anthropic), an AI coding assistant, throughout development.
+
+**How AI was used**
+
+- **Implementation:** the AI wrote most of the code, tests, Docker setup and this README, working from my instructions one step at a time.
+- **Checks:** after each change it ran the test suite, Pint and Larastan, and any failures were fixed before moving on.
+
+**What I decided and directed**
+
+- **Scope:** how to interpret the requirements, and which bonus features to build.
+- **My coding style:** I asked the AI to follow the conventions from my existing Laravel projects, and it studied one of them to match how I work. That includes:
+  - code grouped by domain in `src/`
+  - actions with DTOs, and repositories
+  - form requests
+  - response macros for a consistent `{message, data}` format
+  - scopes like `applyFilter`
+  - Scramble for API docs
+  - tests organised by domain
+- **API behaviour:**
+  - camelCase fields and label values matching `test_data.json`
+  - `search` as its own query parameter
+  - soft deletes
+  - blocking duplicate client and project names
+- **Tools:** MySQL for Docker.
+
+**Review**
+
+I reviewed the changes and tested the API locally. Where the behaviour wasn't what I wanted, I had it changed. For example, I moved `search` out of `filters`, and stopped the duplicate check from rejecting a project saved under its own name.
 
 ## Development
 
